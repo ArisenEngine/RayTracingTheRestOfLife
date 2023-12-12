@@ -143,12 +143,14 @@
     <ClInclude Include="ray.h" />
     <ClInclude Include="rtw_stb_image.h" />
     <ClInclude Include="rt_weekend.h" />
+    <ClInclude Include="graph.h" />
     <ClInclude Include="sphere.h" />
     <ClInclude Include="texture.h" />
     <ClInclude Include="vec3.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="MonteTest\uniform_stratified.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
