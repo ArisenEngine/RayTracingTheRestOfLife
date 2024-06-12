@@ -24,20 +24,33 @@ struct varying
 class camera {
 
 public:
-	camera() = delete;
-	camera(vec3 position, float near, float far, float fov, float aspect_ratio) :
+	std::string name{ "default" };
+	cv::Mat* buffer{ nullptr };
+
+	camera(std::string name, vec3 position, float near, float far, float fov, int width, int height, int bounce, int samples, bool importance) :
 		_position(position),
 		_fov(fov),
 		_near(near),
 		_far(far),
-		_aspect_ratio(aspect_ratio)
+		_aspect_ratio((float)width / height),
+		name(name),
+		bounce(bounce),
+		sample_count(samples),
+		importance_sampling(importance)
 	{
-
+		cv::namedWindow(name, cv::WINDOW_AUTOSIZE);
+		buffer = new cv::Mat(std::vector<int>{height, width}, CV_8UC3, cv::Scalar(0, 0, 0));
 	}
 
-	void move(vec3 offset)
+	~camera()
 	{
-		_position += offset;
+		cv::destroyWindow(name);
+		delete buffer;
+	}
+
+	void present()
+	{
+		cv::imshow(name, *buffer);
 	}
 
 	float aspect_ratio() const { return _aspect_ratio; }
@@ -100,10 +113,10 @@ public:
 	// ray tracing
 	int sample_count{ 10 };
 	int bounce{ 10 };
-	color  background;               // Scene background color
+	color background;               // Scene background color
+	bool importance_sampling{ false };
 
-
-	void render(cv::Mat* buffer, const hittable_list& world, int tile_size = 128)
+	void render(const hittable_list& world, int&& tile_size)
 	{
 
 		if (_rendering_thread.joinable())
@@ -114,6 +127,7 @@ public:
 		_is_running = true;
 		_world = world;
 
+
 		void (camera:: * tracer)(cv::Mat * buffer,
 			const int rows_start, const int rows_end,
 			const int cols_start, const int cols_end,
@@ -121,36 +135,36 @@ public:
 
 		tracer = &camera::ray_tracing;
 
-		_rendering_thread = std::thread([this, tracer, buffer, &tile_size]() {
+		_rendering_thread = std::thread([this, tracer, &tile_size]() {
 
 			const int horizontal_count = std::ceil((double)buffer->cols / tile_size);
-			const int vertical_count = std::ceil((double)buffer->rows / tile_size);
+		const int vertical_count = std::ceil((double)buffer->rows / tile_size);
 
-			auto start_clock = clock();
+		auto start_clock = clock();
 
-			for (int i = 0; i < vertical_count; ++i)
+		for (int i = 0; i < vertical_count; ++i)
+		{
+			for (int j = 0; j < horizontal_count; ++j)
 			{
-				for (int j = 0; j < horizontal_count; ++j)
-				{
-					std::thread tracing_thread(tracer,
-						this,
-						buffer,										 // render target
-						i * tile_size,							     // row start
-						std::min(buffer->rows, (i + 1) * tile_size), // row end
-						j * tile_size,                               // col start
-						std::min(buffer->cols, (j + 1) * tile_size), // col end
-						sample_count, // sample count
-						bounce  // bounce count
-						);
+				std::thread tracing_thread(tracer,
+					this,
+					buffer,										 // render target
+					i * tile_size,							     // row start
+					std::min(buffer->rows, (i + 1) * tile_size), // row end
+					j * tile_size,                               // col start
+					std::min(buffer->cols, (j + 1) * tile_size), // col end
+					sample_count, // sample count
+					bounce  // bounce count
+				);
 
-					_tiled_threads.emplace_back(std::move(tracing_thread));
-				}
+				_tiled_threads.emplace_back(std::move(tracing_thread));
 			}
+		}
 
-			join_tiled_threads();
+		join_tiled_threads();
 
-			cv::putText(*buffer, "frame time:" + std::to_string((clock() - start_clock) / 1000) + " s ", cv::Point(4, 25), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1.5);
-		});
+		cv::putText(*buffer, "frame time:" + std::to_string((clock() - start_clock) / 1000) + " s ", cv::Point(4, 25), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1.5);
+			});
 
 
 	}
@@ -165,7 +179,6 @@ public:
 		{
 			_rendering_thread.join();
 		}
-
 
 	}
 
@@ -224,16 +237,34 @@ private:
 		if (!world.hit(r, interval(0.001, infinity), rec))
 			return background;
 
-		
-
 		ray scattered;
 		color attenuation;
-		color color_from_emission = rec.mat->emitted(rec.u, rec.v, rec.p);
-
-		if (!rec.mat->scatter(r, rec, attenuation, scattered))
+		color color_from_emission = rec.mat->emitted(scattered, rec, rec.u, rec.v, rec.p);
+		double pdf = 1.0;
+		if (!rec.mat->scatter(r, rec, attenuation, scattered, pdf, importance_sampling))
 			return color_from_emission;
 
-		color color_from_scatter = attenuation * ray_cast(scattered, world, bounce - 1);
+		auto on_light = point3(random_double(213, 343), 554, random_double(227, 332));
+		auto to_light = on_light - rec.p;
+		auto distance_squared = to_light.length_squared();
+		to_light = normalize(to_light);
+
+		if (dot(to_light, rec.normal) < 0)
+			return color_from_emission;
+
+		double light_area = (343 - 213) * (332 - 227);
+		auto light_cosine = fabs(to_light.y());
+		if (light_cosine < 0.000001)
+			return color_from_emission;
+
+		pdf = distance_squared / (light_cosine * light_area);
+		scattered = ray(rec.p, to_light, r.time());
+
+		double scattering_pdf = rec.mat->scattering_pdf(r, rec, scattered);
+	
+		color color_from_scatter =
+			(attenuation * scattering_pdf * ray_cast(scattered, world, bounce - 1)) / pdf;
+	
 
 		return color_from_emission + color_from_scatter;
 	}
@@ -284,7 +315,7 @@ private:
 		auto ray_time = random_double();
 
 		return ray(ray_origin, ray_direction, ray_time);
-		
+
 	}
 
 	const interval color_intensity = interval(0.000, 0.999);
@@ -296,11 +327,8 @@ private:
 		const int cols_start, const int cols_end,
 		const int sample_per_pixel, const int bounce)
 	{
-
 		auto target_width = buffer->cols;
 		auto target_height = buffer->rows;
-
-		auto current_clock = clock();
 
 		for (int j = rows_start; j < rows_end; ++j) {
 			for (int i = cols_start; i < cols_end; ++i) {
