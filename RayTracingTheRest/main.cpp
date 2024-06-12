@@ -17,6 +17,7 @@
 #include "texture.h"
 #include "quad.h"
 #include "constant_medium.h"
+#include "graph.h"
 
 #if _DEBUG
 #pragma comment(lib,"opencv_world481d.lib")
@@ -147,10 +148,14 @@ void cornell_box(hittable_list& world) {
 	box1 = make_shared<translate>(box1, vec3(265, 0, 295));
 	world.add(box1);
 
-	shared_ptr<hittable> box2 = box(point3(0, 0, 0), point3(165, 165, 165), white);
+	/*shared_ptr<hittable> box2 = box(point3(0, 0, 0), point3(165, 165, 165), white);
 	box2 = make_shared<rotate_y>(box2, -18);
 	box2 = make_shared<translate>(box2, vec3(130, 0, 65));
-	world.add(box2);
+	world.add(box2);*/
+
+	// Glass Sphere
+	auto glass = make_shared<dielectric>(1.5);
+	world.add(make_shared<sphere>(point3(190, 90, 190), 90, glass));
 }
 
 void cornell_smoke(hittable_list& world) {
@@ -291,53 +296,83 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
-	cv::String window_name = "Raytracing: The Next Week";
-
-	cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
-
 	const float aspect_ratio = 1;
-	const int height = 400;
-	const int tile_count = 4;
+	const int height = 512;
+	const int tile_count = 2;
 	const int width = (int)(height * aspect_ratio);
-	auto buffer = new cv::Mat(height, width, CV_8UC3);
-
-	std::cout << "width:" << width << ", height: " << height << "\n";
 	int keyCode = 0;
 
 
 	world = hittable_list(make_shared<bvh_node>(world));
 
 	camera main_camera(
-		vec3{ 0, 0, 9 },               // position
-		0.1f,                           // near
-		10000.f,                       // far
-		20.f,                          // fov
-		aspect_ratio                   // aspect ratio
+		"cornel box",                // name
+		vec3(0, 0, 0),              // pos
+		0.1, 10000,                 // near far
+		20,                         // fov
+		width, height,              // buffer size
+		10,                         // bounce
+		100,                         // samples,
+		false                        // importance sampling
 	);
-
-
 	main_camera.set_fov(40);
 	main_camera.set_position(point3(278, 278, -800));
 	main_camera.look_at(point3(278, 278, 0));
-	main_camera.set_defocus_angle(0.0);
-	main_camera.set_focus_dist(10);
-	main_camera.sample_count = 100;
-	main_camera.bounce = 50;
-	main_camera.background = color(0, 0, 0);
+	main_camera.importance_sampling = false;
+	main_camera.render(world, ceil(width / tile_count));
 
-	main_camera.render(buffer, world, ceil(width / tile_count));
+	/*const int size = 500;
+    const int sample_count = 100;
+    graph uniform_graph(size, size, "uniform");
+    graph stratified_graph(size, size, "stratified");
+	graph consine_graph(size, size, "cosine");
+
+	std::thread graph_thread([
+		&sample_count,
+		&uniform_graph, 
+	    &stratified_graph,
+		&consine_graph
+	]() {
+
+		for (int i = 0; i < sample_count; ++i)
+		{
+			for (int j = 0; j < sample_count; ++j)
+			{
+				auto r1 = random_double();
+				auto r2 = random_double();
+
+				uniform_graph.draw_point(r1, r2);
+
+				auto x = 2 * ((i + r1) / sample_count) - 1;
+				auto y = 2 * ((j + r2) / sample_count) - 1;
+				stratified_graph.draw_point(x * 0.5 + 0.5, y * 0.5 + 0.5);
+
+				consine_graph.draw_point(sqrt(1 - r1), r2);
+
+				x = cos(2 * pi * r1) * 2 * sqrt(r2 * (1 - r2));
+				y = sin(2 * pi * r1) * 2 * sqrt(r2 * (1 - r2));
+			}
+		}
+
+	});*/
 
 	while (keyCode != 27)
 	{
-		cv::imshow(window_name, *buffer);
+		main_camera.present();
+		
+	/*	uniform_graph.present();
+		stratified_graph.present();
+		consine_graph.present();*/
+
 		keyCode = cv::pollKey();
 	}
 
 	main_camera.dispose();
 
-	cv::destroyAllWindows();
-
-	delete buffer;
+	/*if (graph_thread.joinable())
+	{
+		graph_thread.join();
+	}*/
 
 	return 0;
 }

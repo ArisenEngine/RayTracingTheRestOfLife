@@ -131,6 +131,55 @@ inline vec3 random_unit_vector() {
     return normalize(random_in_unit_sphere());
 }
 
+inline vec3 sphere_to_world_direction(vec3 hit_normal, float theta, float fi);
+inline vec3 cosine_weighted_random_vector(vec3 hit_normal)
+{
+    auto theta = acos(sqrt(1 - random_double()));
+    auto fi = 2 * pi * random_double();
+
+    return sphere_to_world_direction(hit_normal, theta, fi);
+}
+
+inline vec3 ggx_weighted_random_vector(vec3 hit_normal, float roughness)
+{
+    // 算啦。写不出来，不写了，以后再看了，拜拜
+
+    return cosine_weighted_random_vector(hit_normal);
+}
+
+inline vec3 random_cosine_direction() {
+    auto r1 = random_double();
+    auto r2 = random_double();
+
+    auto phi = 2 * pi * r1;
+    auto x = cos(phi) * sqrt(r2);
+    auto y = sin(phi) * sqrt(r2);
+    auto z = sqrt(1 - r2);
+
+    return vec3(x, y, z);
+}
+
+inline vec3 sphere_to_world_direction(vec3 hit_normal, float theta, float fi)
+{
+    auto x_object = sin(theta) * cos(fi);
+    auto y_object = sin(theta) * sin(fi);
+    auto z_object = cos(theta);
+    auto dir_in_object = normalize(vec3(x_object, y_object, z_object));
+
+    auto up_world = abs(hit_normal.y()) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    auto x_axis = normalize(cross(up_world, hit_normal));
+    auto y_axis = cross(hit_normal, x_axis);
+    auto z_axis = hit_normal;
+
+
+    return normalize(vec3(
+        dot(vec3(x_axis.x(), y_axis.x(), z_axis.x()), dir_in_object),
+        dot(vec3(x_axis.y(), y_axis.y(), z_axis.y()), dir_in_object),
+        dot(vec3(x_axis.z(), y_axis.z(), z_axis.z()), dir_in_object)
+    )
+    );
+}
+
 inline vec3 random_on_hemisphere(const vec3& normal) {
     vec3 on_unit_sphere = random_unit_vector();
     if (dot(on_unit_sphere, normal) > 0.0) // In the same hemisphere as the normal
@@ -141,7 +190,7 @@ inline vec3 random_on_hemisphere(const vec3& normal) {
 
 inline vec3 random_in_unit_disk() {
     while (true) {
-        auto p = vec3(random_double(-1,1), random_double(-1,1), 0);
+        auto p = vec3(random_double(-1, 1), random_double(-1, 1), 0);
         if (p.length_squared() < 1)
             return p;
     }

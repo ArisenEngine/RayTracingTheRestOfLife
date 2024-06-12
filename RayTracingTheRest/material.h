@@ -3,6 +3,7 @@
 #include "rt_weekend.h"
 #include "hittable_list.h"
 #include "texture.h"
+#include "onb.h"
 
 class hit_record;
 
@@ -10,12 +11,19 @@ class material {
 public:
     virtual ~material() = default;
 
-    virtual color emitted(double u, double v, const point3& p) const {
+    virtual double scattering_pdf(const ray& r_in, const hit_record& rec, const ray& scattered)
+        const {
+        return 0;
+    }
+
+    virtual color emitted(
+        const ray& r_in, const hit_record& rec, double u, double v, const point3& p
+    ) const {
         return color(0, 0, 0);
     }
 
     virtual bool scatter(
-        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered) const = 0;
+        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, double& pdf , bool importance_sampling = false) const = 0;
 };
 
 
@@ -24,19 +32,19 @@ public:
     lambertian(const color& a) : albedo(make_shared<solid_color>(a)) {}
     lambertian(std::shared_ptr<texture> a) : albedo(a) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered)
+    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, double& pdf, bool importance_sampling = false)
         const override {
-        auto scatter_direction = rec.normal + random_unit_vector();
-        
-        // Catch degenerate scatter direction
-        if (scatter_direction.near_zero())
-        {
-            scatter_direction = rec.normal;
-        }
-
-        scattered = ray(rec.p, scatter_direction, r_in.time());
+        onb uvw;
+        uvw.build_from_w(rec.normal);
+        auto scatter_direction = uvw.local(random_cosine_direction());
+        scattered = ray(rec.p, normalize(scatter_direction), r_in.time());
         attenuation = albedo->value(rec.u, rec.v, rec.p);
+        pdf = dot(uvw.w(), scattered.direction()) / pi;
         return true;
+    }
+
+    double scattering_pdf(const ray& r_in, const hit_record& rec, const ray& scattered) const {
+        return 1 / (2 * pi);
     }
 
 private:
@@ -46,18 +54,24 @@ private:
 
 class metal : public material {
 public:
-    metal(const color& a, double f) : albedo(a), fuzz(f < 1 ? f : 1) {}
+    metal(const color& a, double f = 0.0) : albedo(make_shared<solid_color>(a)), fuzz(f < 1 ? f : 1) {}
+    metal(std::shared_ptr<texture> a, double f = 0.0) : albedo(a), fuzz(f < 1 ? f : 1) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered)
+    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, double& pdf, bool importance_sampling = false)
         const override {
-        vec3 reflected = reflect(normalize(r_in.direction()), rec.normal);
-        scattered = ray(rec.p, reflected + fuzz * random_in_unit_sphere(), r_in.time());
-        attenuation = albedo;
+        vec3 reflected = reflect(r_in.direction(), rec.normal);
+
+        scattered = ray(rec.p,
+            importance_sampling ?
+            ggx_weighted_random_vector(rec.normal, fuzz) :
+            reflected + fuzz * random_in_unit_sphere(),
+            r_in.time());
+        attenuation = albedo->value(rec.u, rec.v, rec.p);;
         return (dot(scattered.direction(), rec.normal) > 0);
     }
 
 private:
-    color albedo;
+    std::shared_ptr<texture> albedo;
     double fuzz;
 };
 
@@ -65,7 +79,7 @@ class dielectric : public material {
 public:
     dielectric(double index_of_refraction) : ir(index_of_refraction) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered)
+    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, double& pdf, bool importance_sampling = false)
         const override {
         attenuation = color(1.0, 1.0, 1.0);
         double refraction_ratio = rec.front_face ? (1.0 / ir) : ir;
@@ -97,17 +111,38 @@ private:
     }
 };
 
+//class one_bounce_specular : public material {
+//public:
+//    one_bounce_specular(const color& a): albedo(make_shared<solid_color>(a)) {}
+//    one_bounce_specular(std::shared_ptr<texture> a, double f = 0.0) : albedo(a){}
+//
+//    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered)
+//        const override {
+//        vec3 reflected = reflect(normalize(r_in.direction()), rec.normal);
+//        scattered = ray(rec.p, reflected, r_in.time());
+//        attenuation = albedo->value(rec.u, rec.v, rec.p);
+//        return false;
+//    }
+//
+//private:
+//    std::shared_ptr<texture> albedo;
+//   
+//};
+
 class diffuse_light : public material {
 public:
     diffuse_light(shared_ptr<texture> a) : emit(a) {}
     diffuse_light(color c) : emit(make_shared<solid_color>(c)) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered)
+    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, double& pdf, bool importance_sampling = false)
         const override {
         return false;
     }
 
-    color emitted(double u, double v, const point3& p) const override {
+    color emitted(const ray& r_in, const hit_record& rec, double u, double v, const point3& p)
+        const override {
+        if (!rec.front_face)
+            return color(0, 0, 0);
         return emit->value(u, v, p);
     }
 
@@ -120,13 +155,18 @@ public:
     isotropic(color c) : albedo(make_shared<solid_color>(c)) {}
     isotropic(shared_ptr<texture> a) : albedo(a) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered)
+    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, double& pdf, bool importance_sampling = false)
         const override {
         scattered = ray(rec.p, random_unit_vector(), r_in.time());
         attenuation = albedo->value(rec.u, rec.v, rec.p);
+        pdf = 1 / (4 * pi);
         return true;
     }
 
+    double scattering_pdf(const ray& r_in, const hit_record& rec, const ray& scattered)
+        const override {
+        return 1 / (4 * pi);
+    }
 private:
     shared_ptr<texture> albedo;
 };
